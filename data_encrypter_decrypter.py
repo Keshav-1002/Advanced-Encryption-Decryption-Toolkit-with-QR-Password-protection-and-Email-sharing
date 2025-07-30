@@ -9,12 +9,159 @@ from tkinter import simpledialog
 import hashlib
 import time
 import smtplib
-from email.message import EmailMessage
 import re
 import os
 import webbrowser
+import qrcode
+from PIL import Image
+from PIL import ImageTk
+import json
+from pyzbar.pyzbar import decode
+import cv2
+from tkinter import filedialog
+from email.message import EmailMessage
 
+themed_widgets = []
 mode = "dark"
+
+def generate_qr_code():
+    encrypted_data = preview_box.get("1.0", END).strip()
+
+    if not encrypted_data:
+        play_error_sound()
+        speak("No encrypted data found to generate QR code.")
+        messagebox.showwarning("No Data", "No encrypted message found in preview.")
+        return
+
+    try:
+        
+        with open("history.txt", "r") as hf:
+            last_line = hf.readlines()[-1]
+            msg_id, encrypted_data, key, timestamp = last_line.strip().split("||")
+
+        qr_data = {
+            "data": encrypted_data,
+            "key": key,
+            "msg_id": msg_id
+        }
+
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_H,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(json.dumps(qr_data))
+        qr.make(fit=True)
+
+        img = qr.make_image(fill_color="black", back_color="white")
+        qr_window = Toplevel(root)
+        qr_window.title("Encrypted Message - QR Code")
+        qr_window.geometry("800x800")
+        qr_window.resizable(False, False)
+
+        img.save("qrcode.png")
+
+        qr_img = Image.open("qrcode.png")
+        qr_tk = ImageTk.PhotoImage(qr_img)
+        label = Label(qr_window, image=qr_tk)
+        label.image = qr_tk
+        label.pack(pady=10)
+
+        save_btn = Button(qr_window, text="Save QR Code", font=("Segoe UI", 10),
+                        command=lambda: img.save("EncryptedMessageQR.png"))
+        save_btn.pack(pady=5)
+
+        close_btn = Button(qr_window, text="Close", font=("Segoe UI", 10), command=qr_window.destroy)
+        close_btn.pack(pady=5)
+
+        log_activity("QR code generated for encrypted message.")
+        speak("QR code with password protection generated.")
+
+    except Exception as e:
+        play_error_sound()
+        speak("Error generating QR code.")
+        messagebox.showerror("QR Code Error", str(e))
+
+def decrypt_qr_code():
+    play_click_sound()
+    file_path = filedialog.askopenfilename(title="Select QR Code Image",
+                                           filetypes=[("Image Files", "*.png *.jpg *.jpeg")])
+    
+    if not file_path:
+        return
+
+    try:
+        img = cv2.imread(file_path)
+        decoded_objs = decode(img)
+
+        if not decoded_objs:
+            play_error_sound()
+            speak("No QR code found in the image.")
+            messagebox.showerror("Error", "No QR code found.")
+            return
+
+        qr_data = json.loads(decoded_objs[0].data.decode("utf-8"))
+
+        encrypted_str = qr_data.get("data")
+        key = int(qr_data.get("key"))
+        msg_id = qr_data.get("msg_id")
+
+        if not encrypted_str or not key or not msg_id:
+            raise ValueError("Incomplete QR data")
+
+        entered_pass = simpledialog.askstring("Password", "Enter password for QR message:", show="*")
+        
+        if not entered_pass:
+            return
+
+        password_valid = False
+        
+        if os.path.exists("passwords.txt"):
+            
+            with open("passwords.txt", "r") as f:
+                
+                for line in f:
+                    pid, pwhash = line.strip().split("||")
+                    
+                    if pid == msg_id and hash_password(entered_pass) == pwhash:
+                        password_valid = True
+                        break
+
+        if not password_valid:
+            play_error_sound()
+            speak("Incorrect password.")
+            messagebox.showerror("Access Denied", "Incorrect password. Decryption failed.")
+            return
+
+        length = len(encrypted_str)
+        key, decrypted_str = decryption(encrypted_str, length, key)
+
+        j = length // 2
+        k = length
+        
+        for _ in range(2):
+            num = key % 10
+            key //= 10
+            decrypted_str = list(decrypted_str)
+            
+            while j < k:
+                decrypted_str[j] = chr(ord(decrypted_str[j]) ^ num)
+                j += 1
+                
+            decrypted_str = ''.join(decrypted_str)
+            k = j // 2
+            j = 0
+
+        play_success_sound()
+        speak("QR message decrypted successfully.")
+        type_writer_effect(decrypted_str)
+        log_activity("Decrypted from QR Code.")
+
+    except Exception as e:
+        play_error_sound()
+        speak("Error during QR code decryption.")
+        messagebox.showerror("Error", str(e))
 
 class ToolTip:
     
@@ -24,8 +171,8 @@ class ToolTip:
         self.tip_window = None
         self.id = None
         self.x = self.y = 0
-        widget.bind("<Enter>", self.schedule)
-        widget.bind("<Leave>", self.unschedule)
+        widget.bind("<Enter>", self.schedule, add="+")
+        widget.bind("<Leave>", self.unschedule, add="+")
 
     def schedule(self, event=None):
         self.unschedule()
@@ -124,7 +271,7 @@ def type_writer_effect(output_text):
         
     decrypted_display.config(state=DISABLED)
 
-def send_encrypted_email():
+def send_encrypted_email(include_qr=False, include_text=False):
     
     try:
         sender_email = simpledialog.askstring("Sender Email", "Enter sender's Gmail address:")
@@ -142,32 +289,59 @@ def send_encrypted_email():
         if not to_email:
             return
 
-        with open("data.txt", "r") as df, open("key.txt", "r") as kf:
-            encrypted_data = df.read()
-            encryption_key = kf.read()
-
         msg = EmailMessage()
-        msg.set_content(
-            f"Here is your encrypted data and key:\n\n"
-            f"Encrypted Data:\n{encrypted_data}\n\n"
-            f"Encryption Key:\n{encryption_key}"     )
-        msg['Subject'] = "Encrypted Data"
+        body = ""
+
+        if include_text:
+            
+            with open("data.txt", "r") as df, open("key.txt", "r") as kf:
+                encrypted_data = df.read()
+                encryption_key = kf.read()
+                
+            body += f"Here is your encrypted data and key:\n\nEncrypted Data:\n{encrypted_data}\nEncryption Key:\n{encryption_key}\n\n"
+
+        if not body:
+            body = "QR code attached as requested."
+
+        msg.set_content(body)
+        msg['Subject'] = "Your Secure Data"
         msg['From'] = sender_email
         msg['To'] = to_email
+
+        if include_qr and os.path.exists("qrcode.png"):
+            
+            with open("qrcode.png", "rb") as f:
+                qr_data = f.read()
+                msg.add_attachment(qr_data, maintype="image", subtype="png", filename="EncryptedMessageQR.png")
 
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
             smtp.login(sender_email, sender_password)
             smtp.send_message(msg)
 
         speak("Email sent successfully.")
-        messagebox.showinfo("Email Sent", f"Encrypted data sent to {to_email}.")
-        log_activity(f"Encrypted data emailed from {sender_email} to: {to_email}")
+        messagebox.showinfo("Email Sent", f"Your data was sent to {to_email}.")
+        log_activity(f"Encrypted data emailed to {to_email}. Options - QR: {include_qr}, Text: {include_text}")
 
     except Exception as e:
         play_error_sound()
         speak("Failed to send email.")
         messagebox.showerror("Email Error", f"Could not send email:\n\n{str(e)}")
         log_activity("Email failed: " + str(e))
+
+def ask_email_options():
+    choice = messagebox.askquestion("Send Email", "Send Encrypted Message + Key + QR code?")
+    
+    if choice == "yes":
+        send_encrypted_email(include_qr=True, include_text=True)
+        
+    else:
+        choice2 = messagebox.askyesnocancel("Send Email", "Send only QR code?")
+        
+        if choice2 is True:
+            send_encrypted_email(include_qr=True, include_text=False)
+            
+        elif choice2 is False:
+            send_encrypted_email(include_qr=False, include_text=True)
 
 def check_password_strength(password):
     style = ttk.Style()
@@ -276,10 +450,7 @@ def enc_main():
         preview_box.delete(1.0, END)
         preview_box.insert(END, encrypted_str)
         preview_box.config(state=DISABLED)
-        answer = messagebox.askyesno("Send Email", "Do you want to email the encrypted message and key?")
-        
-        if answer:
-            send_encrypted_email()
+        ask_email_options()
             
         previous_combobox['values'] = load_history_items()
         previous_combobox.set("Select a previous encrypted message")
@@ -398,7 +569,6 @@ def decrypt_from_history(event):
                     "timestamp": ts
                 })
 
-
         if msg_id not in pw_data:
             messagebox.showerror("Error", "Password not found for selected message.")
             return
@@ -457,40 +627,32 @@ def log_activity(action):
 
 def toggle_theme():
     global mode
+    mode = "light" if mode == "dark" else "dark"
+    bg_color = "white" if mode == "light" else "#263238"
+    fg_color = "black" if mode == "light" else "white"
+    textbox_bg = "#F0F0F0" if mode == "light" else "#1E1E1E"
+
+    root.configure(bg=bg_color)
+
+    for widget in themed_widgets:
+        
+        if isinstance(widget, Text):
+            widget.configure(bg=textbox_bg, fg=fg_color)
+            
+        else:
+            widget.configure(bg=bg_color, fg=fg_color)
+
+    style = ttk.Style()
     
-    if mode == "dark":
-        mode = "light"
-        root.configure(bg="white")
-        label.configure(bg="white", fg="black")
-        
-        encrypt_button.configure(style="TButton")
-        decrypt_button.configure(style="TButton")
-        toggle_button.configure(style="TButton")
-        log_box.configure(bg="#F0F0F0", fg="black")
-        log_label.configure(bg="white", fg="black")
-        
-        preview_box.configure(bg="#F0F0F0", fg="black")
-        preview_label.configure(bg="white", fg="black")
-        decrypted_display.configure(bg="#F0F0F0", fg="black")
-        decrypted_label.configure(bg="white", fg="black")
-        log_activity("Theme changed to Light Mode")
+    if mode == "light":
+        style.configure("TButton", background="#AED581", foreground="black")
+        style.configure("Dark.TButton", background="#AED581", foreground="black")
         
     else:
-        mode = "dark"
-        root.configure(bg="#263238")
-        label.configure(bg="#263238", fg="white")
-        
-        encrypt_button.configure(style="Dark.TButton")
-        decrypt_button.configure(style="Dark.TButton")
-        toggle_button.configure(style="Dark.TButton")
-        log_box.configure(bg="#1E1E1E", fg="white")
-        log_label.configure(bg="#263238", fg="white")
-        
-        preview_box.configure(bg="#1E1E1E", fg="white")
-        preview_label.configure(bg="#263238", fg="white")
-        decrypted_display.configure(bg="#1E1E1E", fg="white")
-        decrypted_label.configure(bg="#263238", fg="white")
-        log_activity("Theme changed to Dark Mode")
+        style.configure("Dark.TButton", background="#4DB6AC", foreground="white")
+        style.configure("TButton", background="#4DB6AC", foreground="white")
+
+    log_activity(f"Theme changed to {'Light' if mode == 'light' else 'Dark'} Mode")
 
 def show_about():
     about_window = Toplevel(root)
@@ -502,6 +664,8 @@ def show_about():
     bg_color = "#263238" if mode == "dark" else "white"
     fg_color = "white" if mode == "dark" else "black"
     text_bg = "#1E1E1E" if mode == "dark" else "#F0F0F0"
+    link_normal_color = "blue"
+    link_hover_color = "lightblue" if mode == "dark" else "purple"
     
     about_window.configure(bg=bg_color)
     about_label = Label(about_window, text="🔐 Secure Data Encrypter & History Manager",
@@ -512,11 +676,20 @@ def show_about():
         webbrowser.open("https://github.com/Keshav-1002/Data-Encrypter-Decrypter")
         
     github_link = Label(about_window, text="🔗 GitHub: github.com/Keshav-1002/Data-Encrypter-Decrypter",
-                font=("Segoe UI", 10, "underline"), fg="blue", bg=bg_color, cursor="hand2")
+    font=("Segoe UI", 10, "underline"), fg=link_normal_color, bg=bg_color, cursor="hand2",
+    activeforeground=link_hover_color  )
     github_link.pack()
+    
+    def on_hover_enter(event):
+        event.widget.config(fg=link_hover_color, font=("Segoe UI", 10, "underline"))
+
+    def on_hover_leave(event):
+        event.widget.config(fg=link_normal_color, font=("Segoe UI", 10, "underline"))
+
+    github_link.bind("<Enter>", on_hover_enter)
+    github_link.bind("<Leave>", on_hover_leave)
     github_link.bind("<Button-1>", open_github)
-    github_link.bind("<Enter>", lambda e: github_link.config(fg="purple"))
-    github_link.bind("<Leave>", lambda e: github_link.config(fg="blue"))
+
     ToolTip(github_link, "Click to open the GitHub repository in your browser.")
 
     frame = Frame(about_window, bg=bg_color)
@@ -527,34 +700,49 @@ def show_about():
 
     about_text = Text(frame, wrap=WORD, font=("Segoe UI", 10), yscrollcommand=scrollbar.set, bg=text_bg,
                         fg=fg_color, relief=FLAT)
+    about_text.config(state=NORMAL)
+    
     about_text.insert(END, (
         "👨‍💻 Author: Keshav Singhal\n"
         "📫 GitHub: https://github.com/Keshav-1002/Data-Encrypter-Decrypter\n\n"
+
         "📘 Features:\n"
-        "✔️ Encrypt messages with 2-phase XOR and random multi-digit key.\n"
+        "✔️ Encrypt messages using dual-phase XOR and random multi-digit key.\n"
         "✔️ Password-protected encryption using SHA-256 hashing.\n"
-        "✔️ Password strength checker with live progress bar.\n"
-        "✔️ Decrypt using current or historical encrypted messages.\n"
-        "✔️ Stores only the last 10 encrypted messages with timestamps.\n"
-        "✔️ Passwords stored securely in a separate file (hashed).\n"
-        "✔️ Email encrypted message & key using Gmail SMTP.\n"
-        "✔️ Dark/Light mode toggle.\n"
-        "✔️ Sound and voice feedback using winsound and pyttsx3.\n"
-        "✔️ Activity log window for user actions.\n\n"
+        "✔️ Real-time password strength checker with visual progress bar.\n"
+        "✔️ Store only the last 10 encrypted messages with timestamps.\n"
+        "✔️ Secure password storage (hashed) in a separate file.\n"
+        "✔️ Email options:\n"
+        "   • Encrypted message + key\n"
+        "   • Only QR code\n"
+        "   • Both (message + QR)\n"
+        "✔️ QR code generation for encrypted messages.\n"
+        "✔️ Password-protected QR code decryption.\n"
+        "✔️ Decrypt using current or previous (history) messages.\n"
+        "✔️ Combobox-based selection for decrypting from history.\n"
+        "✔️ Light/Dark mode toggle with themed widget system.\n"
+        "✔️ Activity log tracking all encryption, decryption, and email events.\n"
+        "✔️ Sound and speech feedback using winsound and pyttsx3.\n"
+        "✔️ GitHub link with hover effect and tooltip.\n\n"
+
         "📁 Files Used:\n"
-        "- history.txt: Stores last 10 messages and keys.\n"
-        "- passwords.txt: Stores hashed passwords.\n"
-        "- key.txt, data.txt, pass.txt: Temporary use for current encryption.\n\n"
+        "- history.txt: Stores last 10 encrypted messages and keys.\n"
+        "- passwords.txt: Stores hashed passwords mapped to message IDs.\n"
+        "- qrcode.png: Temporary QR image used for sharing.\n"
+        "- key.txt, data.txt, pass.txt: Temporary storage for last encryption.\n\n"
+
         "🎯 Instructions:\n"
-        "- Enter message and password to encrypt.\n"
-        "- Use 'Encrypt Message' to process and preview.\n"
-        "- Use 'Decrypt Message' for current entry.\n"
-        "- Use dropdown to select and decrypt from history.\n"
-        "- Click 'Toggle Theme' to switch between light/dark mode.\n"
-        "- Click 'Help > About' for this info.\n\n"
-        "✅ Safe. Fast. Offline. Easy to Use."
-    ))
-    
+        "- Enter your message and set a strong password.\n"
+        "- Click 'Encrypt Message' to encrypt and preview the result.\n"
+        "- Generate QR code if needed.\n"
+        "- Choose whether to send the encrypted message, QR, or both via email.\n"
+        "- Decrypt using the latest message, QR image, or a history entry.\n"
+        "- Use 'Toggle Theme' to switch between dark/light modes.\n"
+        "- View logs and GitHub link in the bottom sections.\n\n"
+
+        "✅ Secure. Offline. User-Friendly. Feature-Rich."
+        ))
+
     about_text.config(state=DISABLED)
     about_text.pack(fill=BOTH, expand=True)
     scrollbar.config(command=about_text.yview)
@@ -582,14 +770,16 @@ style.configure("Dark.TButton", padding=10, font=('Segoe UI', 11), foreground="w
 style.configure("Neutral.Horizontal.TProgressbar", troughcolor="#ccc", background="#888888")
 
 label = Label(root, text="Message to Encrypt:", fg="white", bg="#263238", font=("Segoe UI", 12))
-label.pack(pady=10)
+label.pack(pady=(5,5))
+themed_widgets.append(label)
 
 data_entry = Entry(root, width=50, font=("Segoe UI", 11))
-data_entry.pack(pady=10)
+data_entry.pack(pady=7)
 ToolTip(data_entry, "Enter your message here to encrypt.")
 
 password_label = Label(root, text="Set Password:", fg="white", bg="#263238", font=("Segoe UI", 12))
-password_label.pack(pady=(10, 0))
+password_label.pack(pady=(5, 0))
+themed_widgets.append(password_label)
 
 password_entry = Entry(root, width=50, font=("Segoe UI", 11), show="*")
 password_entry.pack(pady=(0, 5))
@@ -600,10 +790,12 @@ show_password_check = Checkbutton(root, text="Show Password", variable=show_pass
     command=toggle_password_visibility, bg="#263238", fg="white", activebackground="#263238", 
     activeforeground="white", selectcolor="#263238" )
 show_password_check.pack()
+themed_widgets.append(show_password_check)
 ToolTip(show_password_check, "Toggle visibility of the password.")
 
 strength_label = Label(root, text="", font=("Segoe UI", 10), bg="#263238", fg="white")
 strength_label.pack(pady=(2, 0))
+themed_widgets.append(strength_label)
 ToolTip(strength_label, "Shows the strength of your entered password.")
 
 strength_bar = ttk.Progressbar(root, length=200, mode='determinate', maximum=100, style="Red.Horizontal.TProgressbar")
@@ -612,7 +804,7 @@ strength_bar["value"] = 0
 ToolTip(strength_bar, "Progress bar for password strength (Weak/Medium/Strong).")
 
 button_frame = Frame(root, bg="#263238")
-button_frame.pack(pady=10)
+button_frame.pack(pady=7)
 
 encrypt_button = ttk.Button(button_frame, text="Encrypt Message", command=enc_main, style="Dark.TButton")
 encrypt_button.grid(row=0, column=0, padx=10)
@@ -623,7 +815,8 @@ decrypt_button.grid(row=0, column=1, padx=10)
 ToolTip(decrypt_button, "Decrypt the most recent encrypted message.")
 
 history_label = Label(root, text="Previous Encrypted Messages:", fg="white", bg="#263238", font=("Segoe UI", 11))
-history_label.pack(pady=(10, 0))
+history_label.pack(pady=(7, 0))
+themed_widgets.append(history_label)
 ToolTip(history_label, "Shows the last 10 encrypted messages.")
 
 previous_combobox = ttk.Combobox(root, state="readonly", font=("Segoe UI", 10), width=60)
@@ -656,34 +849,50 @@ previous_combobox['values'] = load_history_items()
 previous_combobox.bind("<<ComboboxSelected>>", decrypt_from_history)
 ToolTip(previous_combobox, "Select and decrypt an older encrypted message.")
 
-toggle_button = ttk.Button(root, text="Toggle Theme", command=toggle_theme, style="Dark.TButton")
-toggle_button.pack(pady=10)
+toggle_button = ttk.Button(button_frame, text="Toggle Theme", command=toggle_theme, style="Dark.TButton")
+toggle_button.grid(row=0, column=2, pady=10)
 ToolTip(toggle_button, "Switch between Dark and Light theme.")
 
 preview_label = Label(root, text="Encrypted Preview:", fg="white", bg="#263238", font=("Segoe UI", 11, "bold"))
 preview_label.pack(pady=(10, 0))
 ToolTip(preview_label, "Preview of the encrypted message.")
+themed_widgets.append(preview_label)
 
 preview_box = Text(root, height=4, width=70, font=("Courier New", 10), bg="#1E1E1E", fg="white")
 preview_box.pack(pady=5)
 preview_box.config(state=DISABLED)
+themed_widgets.append(preview_box)
 ToolTip(preview_box, "This area shows the encrypted message.")
+
+qr_frame = Frame(root, bg="#263238")
+qr_frame.pack(pady=10)
+
+qr_button = ttk.Button(qr_frame, text="Generate QR Code", command=generate_qr_code, style="Dark.TButton")
+qr_button.grid(row=0, column=0, padx=10)
+
+qr_decode_button = ttk.Button(qr_frame, text="Decrypt from QR Code", command=decrypt_qr_code, style="Dark.TButton")
+qr_decode_button.grid(row=0, column=1, padx=10)
+ToolTip(qr_decode_button, "Scan QR image, enter password to decrypt the message.")
 
 decrypted_label = Label(root, text="Decrypted Output:", fg="white", bg="#263238", font=("Segoe UI", 11, "bold"))
 decrypted_label.pack(pady=(10, 0))
+themed_widgets.append(decrypted_label)
 ToolTip(decrypted_label, "Decrypted message will appear here.")
 
 decrypted_display = Text(root, height=4, width=70, font=("Courier New", 10), bg="#1E1E1E", fg="white")
 decrypted_display.pack(pady=5)
 decrypted_display.config(state=DISABLED)
+themed_widgets.append(decrypted_display)
 ToolTip(decrypted_display, "This area displays the decrypted output.")
 
 log_label = Label(root, text="Activity Log:", fg="white", bg="#263238", font=("Segoe UI", 11, "bold"))
 log_label.pack(pady=(10, 0))
+themed_widgets.append(log_label)
 ToolTip(log_label, "Track your encryption and decryption actions here.")
 
 log_box = Text(root, height=6, width=70, font=("Courier New", 10), bg="#1E1E1E", fg="white")
 log_box.pack(pady=5)
+themed_widgets.append(log_box)
 ToolTip(log_box, "Shows activity logs for encryption/decryption actions.")
 
 data_entry.focus_set()
