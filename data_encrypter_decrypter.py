@@ -20,10 +20,73 @@ from pyzbar.pyzbar import decode
 import cv2
 from tkinter import filedialog
 from email.message import EmailMessage
+from spellchecker import SpellChecker
 
 themed_widgets = []
 mode = "dark"
+spell = SpellChecker()
 
+def show_suggestions(event):
+    
+    try:
+        index = data_entry.index(f"@{event.x},{event.y}")
+        word_start = data_entry.search(r'\m\w+\M', index, backwards=True, regexp=True)
+        word_end = data_entry.search(r'\m\w+\M', index, forwards=True, regexp=True)
+        
+        if not word_start or not word_end:
+            return
+
+        word = data_entry.get(word_start, f"{word_start} wordend").strip()
+
+        if word not in spell:
+            suggestions = spell.candidates(word)
+            
+            if not suggestions:
+                return
+
+            menu = Menu(root, tearoff=0)
+
+            for suggestion in suggestions:
+                menu.add_command(label=suggestion, command=lambda s=suggestion, ws=word_start: replace_word(ws, s))
+
+            menu.post(event.x_root, event.y_root)
+            
+    except Exception as e:
+        print("Context menu error:", e)
+
+def replace_word(start_index, new_word):
+    word_end = data_entry.search(r'\m\w+\M', start_index, forwards=True, regexp=True)
+    data_entry.delete(start_index, f"{start_index} wordend")
+    data_entry.insert(start_index, new_word)
+    highlight_misspelling()
+
+def highlight_misspelling(event=None):
+    content = data_entry.get("1.0", END)
+    data_entry.tag_remove("misspelled", "1.0", END)
+    words = re.findall(r"\b\w+\b", content)
+    misspelled = spell.unknown([word for word in words if not word.istitle()])
+
+    for word in misspelled:
+        start_index = "1.0"
+        
+        while True:
+            pos = data_entry.search(rf"\m{word}\M", start_index, stopindex=END, regexp=True)
+            
+            if not pos:
+                break
+            
+            end_pos = f"{pos}+{len(word)}c"
+            data_entry.tag_add("misspelled", pos, end_pos)
+            start_index = end_pos
+
+    data_entry.tag_config("misspelled", underline=True, foreground="red")
+
+def open_review_link():
+    review_url = "https://forms.gle/YOUR_ACTUAL_REVIEW_LINK_HERE"
+    webbrowser.open_new_tab(review_url)
+    log_activity("Opened review/feedback link from About window.")
+    speak("Opening review link.")
+    
 def generate_qr_code():
     encrypted_data = preview_box.get("1.0", END).strip()
 
@@ -51,6 +114,7 @@ def generate_qr_code():
             box_size=10,
             border=4,
         )
+        
         qr.add_data(json.dumps(qr_data))
         qr.make(fit=True)
 
@@ -660,26 +724,26 @@ def show_about():
     about_window.geometry("600x550")
     about_window.resizable(False, False)
     ToolTip(about_window, "This window provides details about the project.")
-    
+
     bg_color = "#263238" if mode == "dark" else "white"
     fg_color = "white" if mode == "dark" else "black"
     text_bg = "#1E1E1E" if mode == "dark" else "#F0F0F0"
     link_normal_color = "blue"
     link_hover_color = "lightblue" if mode == "dark" else "purple"
-    
+
     about_window.configure(bg=bg_color)
     about_label = Label(about_window, text="🔐 Secure Data Encrypter & History Manager",
-                    font=("Segoe UI", 13, "bold"), bg=bg_color, fg=fg_color)
+                        font=("Segoe UI", 13, "bold"), bg=bg_color, fg=fg_color)
     about_label.pack(pady=(10, 2))
 
     def open_github(event):
         webbrowser.open("https://github.com/Keshav-1002/Data-Encrypter-Decrypter")
-        
+
     github_link = Label(about_window, text="🔗 GitHub: github.com/Keshav-1002/Data-Encrypter-Decrypter",
     font=("Segoe UI", 10, "underline"), fg=link_normal_color, bg=bg_color, cursor="hand2",
-    activeforeground=link_hover_color  )
+    activeforeground=link_hover_color )
     github_link.pack()
-    
+
     def on_hover_enter(event):
         event.widget.config(fg=link_hover_color, font=("Segoe UI", 10, "underline"))
 
@@ -701,7 +765,7 @@ def show_about():
     about_text = Text(frame, wrap=WORD, font=("Segoe UI", 10), yscrollcommand=scrollbar.set, bg=text_bg,
                         fg=fg_color, relief=FLAT)
     about_text.config(state=NORMAL)
-    
+
     about_text.insert(END, (
         "👨‍💻 Author: Keshav Singhal\n"
         "📫 GitHub: https://github.com/Keshav-1002/Data-Encrypter-Decrypter\n\n"
@@ -718,6 +782,10 @@ def show_about():
         "   • Both (message + QR)\n"
         "✔️ QR code generation for encrypted messages.\n"
         "✔️ Password-protected QR code decryption.\n"
+        "✔️ Spell Checker with Suggestions\n"
+        "✔️ Context menu for spell suggestions in the message entry box.\n"
+        "✔️ Typewriter effect for decrypted message display.\n"
+        "✔️ Interactive User Feedback"
         "✔️ Decrypt using current or previous (history) messages.\n"
         "✔️ Combobox-based selection for decrypting from history.\n"
         "✔️ Light/Dark mode toggle with themed widget system.\n"
@@ -747,11 +815,22 @@ def show_about():
     about_text.pack(fill=BOTH, expand=True)
     scrollbar.config(command=about_text.yview)
 
-    close_btn = Button(about_window, text="Close", command=about_window.destroy,
+    button_bottom_frame = Frame(about_window, bg=bg_color)
+    button_bottom_frame.pack(pady=10) 
+
+    rate_us_button = Button(button_bottom_frame, text="Rate Us!", command=open_review_link,
+                            bg="#4DB6AC" if mode == "dark" else "#AED581",
+                            fg="white" if mode == "dark" else "black",
+                            font=("Segoe UI", 10), padx=10, pady=5)
+    rate_us_button.pack(side=LEFT, padx=5)
+    ToolTip(rate_us_button, "Click to leave a review or give feedback.")
+
+
+    close_btn = Button(button_bottom_frame, text="Close", command=about_window.destroy,
                         bg="#4DB6AC" if mode == "dark" else "#AED581",
                         fg="white" if mode == "dark" else "black",
                         font=("Segoe UI", 10), padx=10, pady=5)
-    close_btn.pack(pady=10)
+    close_btn.pack(side=RIGHT, padx=5) 
 
 root = Tk()
 root.title("Secure Data Encrypter")
@@ -773,8 +852,10 @@ label = Label(root, text="Message to Encrypt:", fg="white", bg="#263238", font=(
 label.pack(pady=(5,5))
 themed_widgets.append(label)
 
-data_entry = Entry(root, width=50, font=("Segoe UI", 11))
+data_entry = Text(root, width=50, height=2, font=("Segoe UI", 11), wrap=WORD)
 data_entry.pack(pady=7)
+data_entry.bind("<KeyRelease>", highlight_misspelling)
+data_entry.bind("<Button-3>", show_suggestions)
 ToolTip(data_entry, "Enter your message here to encrypt.")
 
 password_label = Label(root, text="Set Password:", fg="white", bg="#263238", font=("Segoe UI", 12))
@@ -837,7 +918,7 @@ def load_history_items():
                     
                     if len(parts) >= 4:
                         msg_id = parts[0]
-                        timestamp = parts[-1]  # safely get the last part
+                        timestamp = parts[-1] 
                         items.append(f"{msg_id} | {timestamp}")
                         
                 except Exception:
