@@ -20,69 +20,14 @@ from pyzbar.pyzbar import decode
 import cv2
 from tkinter import filedialog
 from email.message import EmailMessage
-from spellchecker import SpellChecker
 
 themed_widgets = []
 mode = "dark"
-spell = SpellChecker()
-
-def show_suggestions(event):
-    
-    try:
-        index = data_entry.index(f"@{event.x},{event.y}")
-        word_start = data_entry.search(r'\m\w+\M', index, backwards=True, regexp=True)
-        word_end = data_entry.search(r'\m\w+\M', index, forwards=True, regexp=True)
-        
-        if not word_start or not word_end:
-            return
-
-        word = data_entry.get(word_start, f"{word_start} wordend").strip()
-
-        if word not in spell:
-            suggestions = spell.candidates(word)
-            
-            if not suggestions:
-                return
-
-            menu = Menu(root, tearoff=0)
-
-            for suggestion in suggestions:
-                menu.add_command(label=suggestion, command=lambda s=suggestion, ws=word_start: replace_word(ws, s))
-
-            menu.post(event.x_root, event.y_root)
-            
-    except Exception as e:
-        print("Context menu error:", e)
-
-def replace_word(start_index, new_word):
-    word_end = data_entry.search(r'\m\w+\M', start_index, forwards=True, regexp=True)
-    data_entry.delete(start_index, f"{start_index} wordend")
-    data_entry.insert(start_index, new_word)
-    highlight_misspelling()
-
-def highlight_misspelling(event=None):
-    content = data_entry.get("1.0", END)
-    data_entry.tag_remove("misspelled", "1.0", END)
-    words = re.findall(r"\b\w+\b", content)
-    misspelled = spell.unknown([word for word in words if not word.istitle()])
-
-    for word in misspelled:
-        start_index = "1.0"
-        
-        while True:
-            pos = data_entry.search(rf"\m{word}\M", start_index, stopindex=END, regexp=True)
-            
-            if not pos:
-                break
-            
-            end_pos = f"{pos}+{len(word)}c"
-            data_entry.tag_add("misspelled", pos, end_pos)
-            start_index = end_pos
-
-    data_entry.tag_config("misspelled", underline=True, foreground="red")
+engine = pyttsx3.init()
+speech_lock = threading.Lock()
 
 def open_review_link():
-    review_url = "https://forms.gle/YOUR_ACTUAL_REVIEW_LINK_HERE"
+    review_url = "https://forms.gle/HaujdagXXmimMqkh7"
     webbrowser.open_new_tab(review_url)
     log_activity("Opened review/feedback link from About window.")
     speak("Opening review link.")
@@ -278,16 +223,12 @@ def toggle_password_visibility():
     else:
         password_entry.config(show="*")
 
-def speak(text):
-    
+def speak(msg):
     def run():
-        engine = pyttsx3.init()
-        engine.setProperty('rate', 160)
-        engine.say(text)
-        engine.runAndWait()
-        engine.stop()
-        
-    threading.Thread(target=run, daemon=True).start()
+        with speech_lock:
+            engine.say(msg)
+            engine.runAndWait()
+    threading.Thread(target=run).start()
 
 def play_click_sound():
     winsound.Beep(800, 75)
@@ -791,7 +732,9 @@ def show_about():
         "✔️ Light/Dark mode toggle with themed widget system.\n"
         "✔️ Activity log tracking all encryption, decryption, and email events.\n"
         "✔️ Sound and speech feedback using winsound and pyttsx3.\n"
-        "✔️ GitHub link with hover effect and tooltip.\n\n"
+        "✔️ GitHub link with hover effect and tooltip.\n"
+        '''💡 Try typing secret educational keywords like “encryptiontip” or “hashing101” in the message 
+                box to learn quick facts!\n\n'''
 
         "📁 Files Used:\n"
         "- history.txt: Stores last 10 encrypted messages and keys.\n"
@@ -852,11 +795,10 @@ label = Label(root, text="Message to Encrypt:", fg="white", bg="#263238", font=(
 label.pack(pady=(5,5))
 themed_widgets.append(label)
 
-data_entry = Text(root, width=50, height=2, font=("Segoe UI", 11), wrap=WORD)
+data_entry = Entry(root, width=50, font=("Segoe UI", 11))
 data_entry.pack(pady=7)
-data_entry.bind("<KeyRelease>", highlight_misspelling)
-data_entry.bind("<Button-3>", show_suggestions)
-ToolTip(data_entry, "Enter your message here to encrypt.")
+ToolTip(data_entry, '''Enter your message here. \nTry keywords like 'encryptiontip', 'hashing101', 
+        'xorinfo', or 'keshavrules' for hidden insights.''')
 
 password_label = Label(root, text="Set Password:", fg="white", bg="#263238", font=("Segoe UI", 12))
 password_label.pack(pady=(5, 0))
@@ -918,7 +860,7 @@ def load_history_items():
                     
                     if len(parts) >= 4:
                         msg_id = parts[0]
-                        timestamp = parts[-1] 
+                        timestamp = parts[-1]  # safely get the last part
                         items.append(f"{msg_id} | {timestamp}")
                         
                 except Exception:
