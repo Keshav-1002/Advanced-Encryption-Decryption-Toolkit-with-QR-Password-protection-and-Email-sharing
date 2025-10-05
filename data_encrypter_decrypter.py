@@ -20,11 +20,86 @@ from pyzbar.pyzbar import decode
 import cv2
 from tkinter import filedialog
 from email.message import EmailMessage
+from spellchecker import SpellChecker
+
+# vubz gjzu pcrs slnv
 
 themed_widgets = []
 mode = "dark"
+spell = SpellChecker()
 engine = pyttsx3.init()
 speech_lock = threading.Lock()
+
+def check_educational_easter_egg():
+    typed_text = data_entry.get("1.0", END).strip().lower()
+
+    tips = {
+        "encryptiontip": "Encryption transforms readable data into unreadable format to protect its confidentiality.",
+        "hashing": "Hashing generates a fixed-size value from input data and is commonly used for storing passwords securely.",
+        "xorinfo": "XOR encryption flips bits based on a key – it's simple but can be strong if used properly.",
+        "keshavrules": "Always hash passwords before storing and never reuse keys for multiple messages."
+        }
+
+    if typed_text in tips:
+        fact = tips[typed_text]
+        speak(fact)
+        log_activity(f"💡 Educational Tip: {fact}")
+        messagebox.showinfo("Encryption Tip", fact)
+
+def show_suggestions(event):
+    
+    try:
+        index = data_entry.index(f"@{event.x},{event.y}")
+        word_start = data_entry.search(r'\m\w+\M', index, backwards=True, regexp=True)
+        word_end = data_entry.search(r'\m\w+\M', index, forwards=True, regexp=True)
+        
+        if not word_start or not word_end:
+            return
+
+        word = data_entry.get(word_start, f"{word_start} wordend").strip()
+
+        if word not in spell:
+            suggestions = spell.candidates(word)
+            
+            if not suggestions:
+                return
+
+            menu = Menu(root, tearoff=0)
+
+            for suggestion in suggestions:
+                menu.add_command(label=suggestion, command=lambda s=suggestion, ws=word_start: replace_word(ws, s))
+
+            menu.post(event.x_root, event.y_root)
+            
+    except Exception as e:
+        print("Context menu error:", e)
+
+def replace_word(start_index, new_word):
+    word_end = data_entry.search(r'\m\w+\M', start_index, forwards=True, regexp=True)
+    data_entry.delete(start_index, f"{start_index} wordend")
+    data_entry.insert(start_index, new_word)
+    highlight_misspelling()
+
+def highlight_misspelling(event=None):
+    content = data_entry.get("1.0", END)
+    data_entry.tag_remove("misspelled", "1.0", END)
+    words = re.findall(r"\b\w+\b", content)
+    misspelled = spell.unknown([word for word in words if not word.istitle()])
+
+    for word in misspelled:
+        start_index = "1.0"
+        
+        while True:
+            pos = data_entry.search(rf"\m{word}\M", start_index, stopindex=END, regexp=True)
+            
+            if not pos:
+                break
+            
+            end_pos = f"{pos}+{len(word)}c"
+            data_entry.tag_add("misspelled", pos, end_pos)
+            start_index = end_pos
+
+    data_entry.tag_config("misspelled", underline=True, foreground="red")
 
 def open_review_link():
     review_url = "https://forms.gle/HaujdagXXmimMqkh7"
@@ -34,7 +109,7 @@ def open_review_link():
     
 def generate_qr_code():
     encrypted_data = preview_box.get("1.0", END).strip()
-
+    
     if not encrypted_data:
         play_error_sound()
         speak("No encrypted data found to generate QR code.")
@@ -51,14 +126,14 @@ def generate_qr_code():
             "data": encrypted_data,
             "key": key,
             "msg_id": msg_id
-        }
+            }
 
         qr = qrcode.QRCode(
             version=1,
-            error_correction=qrcode.constants.ERROR_CORRECT_H,
-            box_size=10,
-            border=4,
-        )
+            error_correction=qrcode.constants.ERROR_CORRECT_M,
+            box_size=7,
+            border=3,
+            )
         
         qr.add_data(json.dumps(qr_data))
         qr.make(fit=True)
@@ -66,7 +141,7 @@ def generate_qr_code():
         img = qr.make_image(fill_color="black", back_color="white")
         qr_window = Toplevel(root)
         qr_window.title("Encrypted Message - QR Code")
-        qr_window.geometry("800x800")
+        qr_window.geometry("700x700")
         qr_window.resizable(False, False)
 
         img.save("qrcode.png")
@@ -224,10 +299,13 @@ def toggle_password_visibility():
         password_entry.config(show="*")
 
 def speak(msg):
+    
     def run():
+        
         with speech_lock:
             engine.say(msg)
             engine.runAndWait()
+            
     threading.Thread(target=run).start()
 
 def play_click_sound():
@@ -284,12 +362,12 @@ def send_encrypted_email(include_qr=False, include_text=False):
         if not sender_email:
             return
 
-        sender_password = simpledialog.askstring("App Password", "Enter sender's Gmail app password:", show="*")
+        sender_password = simpledialog.askstring("App Password", "Enter sender's Gmail app password:", show="*", parent=root)
         
         if not sender_password:
             return
 
-        to_email = simpledialog.askstring("Recipient Email", "Enter recipient's email address:")
+        to_email = simpledialog.askstring("Recipient Email", "Enter recipient's email address:", parent=root)
         
         if not to_email:
             return
@@ -303,7 +381,8 @@ def send_encrypted_email(include_qr=False, include_text=False):
                 encrypted_data = df.read()
                 encryption_key = kf.read()
                 
-            body += f"Here is your encrypted data and key:\n\nEncrypted Data:\n{encrypted_data}\nEncryption Key:\n{encryption_key}\n\n"
+            body += f'''Here is your encrypted data and key:\n\nEncrypted Data:\n{encrypted_data}\n
+                Encryption Key:\n{encryption_key}\n\n'''
 
         if not body:
             body = "QR code attached as requested."
@@ -384,7 +463,7 @@ def check_password_strength(password):
 
 def enc_main():
     play_click_sound()
-    input_str = data_entry.get()
+    input_str = data_entry.get("1.0", "end-1c")
 
     if len(input_str) < 4:
         play_error_sound()
@@ -445,7 +524,7 @@ def enc_main():
         messagebox.showinfo("Success", "Your message is encrypted.")
         log_activity("Encrypted: " + input_str)
         
-        data_entry.delete(0, END)
+        data_entry.delete("1.0", "end")
         password_entry.delete(0, END)
         strength_bar["value"] = 0
         strength_bar.configure(style="Neutral.Horizontal.TProgressbar")
@@ -482,59 +561,102 @@ def decryption(input_str, length, key):
 
 def dec_main():
     play_click_sound()
-
+    encrypted_str = ""
+    key = 0
+    msg_id_latest = ""
+    saved_pass_hash = ""
+    
+    if not os.path.exists("history.txt") or os.stat("history.txt").st_size == 0:
+        play_error_sound()
+        speak("No encrypted history found to decrypt.")
+        messagebox.showwarning("No History", "No previously encrypted messages found.")
+        return
+    
     try:
         
-        with open("key.txt", "r") as kf, open("data.txt", "r") as f, open("pass.txt", "r") as pf:
-            key = int(kf.read())
-            encrypted_str = f.read()
-            saved_pass = pf.read()
+        with open("history.txt", "r") as hf:
+            lines = hf.readlines()
             
-    except FileNotFoundError:
-        play_error_sound()
-        speak("Required files not found.")
-        messagebox.showwarning("Missing Files", "Encrypted data or key not found.")
-        return
-    
+            if not lines:
+                play_error_sound()
+                speak("No history to decrypt.")
+                messagebox.showwarning("No History", "No previously encrypted messages found.")
+                return
+            
+            last_line = lines[-1].strip()
+            parts = last_line.split("||")
+            
+            if len(parts) < 4:
+                raise ValueError("Corrupt history entry detected.")
+            
+            msg_id_latest = parts[0]
+            encrypted_str = parts[1]
+            key = int(parts[2]) 
+            
+        found_pass_hash = False
+        
+        if os.path.exists("passwords.txt"):
+            
+            with open("passwords.txt", "r") as pf:
+                
+                for line in pf:
+                    pid, pwhash = line.strip().split("||")
+                    
+                    if pid == msg_id_latest:
+                        saved_pass_hash = pwhash
+                        found_pass_hash = True
+                        break
+                    
+        if not found_pass_hash:
+            play_error_sound()
+            speak("Password not found for the latest message.")
+            messagebox.showerror("Error", "Password record missing for the last encrypted message.")
+            return
+        
     except Exception as e:
         play_error_sound()
-        speak("Error reading files.")
-        messagebox.showerror("Error", str(e))
+        speak("Error reading history or password files.")
+        messagebox.showerror("File Read Error", f"Could not read required data for decryption:\n{str(e)}")
         return
-
+    
     entered_pass = simpledialog.askstring("Password", "Enter decryption password:", show="*")
     
-    if not entered_pass or hash_password(entered_pass) != saved_pass:
+    if not entered_pass:
+        log_activity("Decryption cancelled: Password prompt closed.")
+        return
+    
+    if hash_password(entered_pass) != saved_pass_hash:
         play_error_sound()
         speak("Incorrect password.")
         messagebox.showerror("Error", "Incorrect password. Decryption aborted.")
         log_activity("Decryption failed: Incorrect password")
         return
-
+    
     log_activity("Password correct. Proceeding with decryption.")
     length = len(encrypted_str)
-    key, decrypted_str = decryption(encrypted_str, length, key)
-    j = length // 2
-    k = length
+    remaining_key_for_phase1_reverse, decrypted_str_phase1 = decryption(encrypted_str, length, key)
+    final_decrypted_str_list = list(decrypted_str_phase1)
+    num2_original = remaining_key_for_phase1_reverse % 10
+    remaining_key_for_phase1_reverse //= 10
+    num1_original = remaining_key_for_phase1_reverse % 10
+    j_start_num2 = length // 2
+    k_end_num2 = length
     
-    for _ in range(2):
-        num = key % 10
-        key //= 10
-        decrypted_str = list(decrypted_str)
+    for i in range(j_start_num2, k_end_num2):
+        final_decrypted_str_list[i] = chr(ord(final_decrypted_str_list[i]) ^ num2_original)
         
-        while j < k:
-            decrypted_str[j] = chr(ord(decrypted_str[j]) ^ num)
-            j += 1
-            
-        decrypted_str = ''.join(decrypted_str)
-        k = j // 2
-        j = 0
-
+    j_start_num1 = 0
+    k_end_num1 = length // 2
+    
+    for i in range(j_start_num1, k_end_num1):
+        final_decrypted_str_list[i] = chr(ord(final_decrypted_str_list[i]) ^ num1_original)
+        
+    final_decrypted_str = ''.join(final_decrypted_str_list)
     play_success_sound()
     speak("Your data is decrypted successfully.")
-    type_writer_effect(decrypted_str)
-    log_activity("Decrypted: " + decrypted_str)
-    data_entry.delete(0, END)
+    type_writer_effect(final_decrypted_str)
+    log_activity("Decrypted: " + final_decrypted_str)
+    data_entry.delete("1.0", "end")
 
 def decrypt_from_history(event):
     selected = previous_combobox.get()
@@ -726,7 +848,7 @@ def show_about():
         "✔️ Spell Checker with Suggestions\n"
         "✔️ Context menu for spell suggestions in the message entry box.\n"
         "✔️ Typewriter effect for decrypted message display.\n"
-        "✔️ Interactive User Feedback"
+        "✔️ Interactive User Feedback\n"
         "✔️ Decrypt using current or previous (history) messages.\n"
         "✔️ Combobox-based selection for decrypting from history.\n"
         "✔️ Light/Dark mode toggle with themed widget system.\n"
@@ -795,9 +917,12 @@ label = Label(root, text="Message to Encrypt:", fg="white", bg="#263238", font=(
 label.pack(pady=(5,5))
 themed_widgets.append(label)
 
-data_entry = Entry(root, width=50, font=("Segoe UI", 11))
+data_entry = Text(root, width=50, height=2, font=("Segoe UI", 11), wrap=WORD)
 data_entry.pack(pady=7)
-ToolTip(data_entry, '''Enter your message here. \nTry keywords like 'encryptiontip', 'hashing101', 
+data_entry.bind("<KeyRelease>", highlight_misspelling)
+data_entry.bind("<FocusOut>", lambda e: check_educational_easter_egg())
+data_entry.bind("<Button-3>", show_suggestions)
+ToolTip(data_entry, '''Enter your message here. \nTry keywords like 'encryptiontip', 'hashing', 
         'xorinfo', or 'keshavrules' for hidden insights.''')
 
 password_label = Label(root, text="Set Password:", fg="white", bg="#263238", font=("Segoe UI", 12))
